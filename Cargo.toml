@@ -1,0 +1,12 @@
+[package]
+name = "siplog"
+version = "0.0.1"
+authors = ["Nikola Whallon <nikola@deepgram.com>"]
+edition = "2018"
+
+[dependencies]
+log = "^0.4"
+env_logger = "^0.6"
+chrono = "^0.4"
+structopt = "^0.2"
+structopt-derive = "^0.2"
