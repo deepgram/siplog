@@ -2,9 +2,108 @@ mod logging;
 
 use chrono::{Local, NaiveDateTime};
 use log::{debug, error, Level};
+use serde::Deserialize;
+use std::convert::TryFrom;
 use std::io;
 use structopt::StructOpt;
-use std::convert::TryFrom;
+use std::convert::TryInto;
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct SipAppJson {
+    level: usize,
+    time: u64,
+    msg: String,
+    pid: usize,
+    hostname: String,
+    #[serde(rename = "type")]
+    type_: Option<String>,
+    stack: Option<String>,
+    errno: Option<String>,
+    syscall: Option<String>,
+    address: Option<String>,
+    port: Option<u16>,
+    secret: Option<String>,
+    v: usize,
+}
+
+impl From<usize> for CustomLevel {
+    fn from(item: usize) -> Self {
+        if item == 10 {
+            return CustomLevel::Trace;
+        }
+        if item == 20 {
+            return CustomLevel::Debug;
+        }
+        if item == 30 {
+            return CustomLevel::Info;
+        }
+        if item == 40 {
+            return CustomLevel::Warn;
+        }
+        if item == 50 {
+            return CustomLevel::Error;
+        }
+        if item == 60 {
+            return CustomLevel::Error;
+        }
+
+        return CustomLevel::Trace;
+    }
+}
+
+impl SipAppJson {
+    pub fn custom_print(&self) {
+        let level = Level::from(CustomLevel::from(self.level));
+        let seconds = (self.time / 1000).try_into().unwrap();
+        let nanoseconds = (1000000 * (self.time - 1000 * (self.time / 1000))).try_into().unwrap();
+        let timestamp = NaiveDateTime::from_timestamp(seconds, nanoseconds).format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let message = self.msg.clone();
+        let (level, color) = match level {
+            Level::Error => ("ERROR", 1),
+            Level::Warn => ("WARN ", 3),
+            Level::Info => ("INFO ", 7),
+            Level::Debug => ("DEBUG", 4),
+            Level::Trace => ("TRACE", 5),
+        };
+        // color, level, and timestamp
+        let mut printout = format!("\x1B[1;3{}m[{} {}]", color, level, timestamp);
+
+        // "extras"
+        let extras_color = 2;
+        printout = format!("{} \x1B[1;3{}m[", printout, extras_color);
+        printout = format!("{}v:{}", printout, self.v);
+        printout = format!("{} pid:{}", printout, self.pid);
+        printout = format!("{} hostname:{}", printout, self.hostname.trim().to_string());
+        if let Some(type_) = &self.type_ {
+            printout = format!("{} type:{}", printout, type_.trim().to_string());
+        }
+        if let Some(stack) = &self.stack {
+            printout = format!("{} stack:{}", printout, stack.trim().to_string());
+        }
+        if let Some(errno) = &self.errno {
+            printout = format!("{} errno:{}", printout, errno.trim().to_string());
+        }
+        if let Some(syscall) = &self.syscall {
+            printout = format!("{} syscall:{}", printout, syscall.trim().to_string());
+        }
+        if let Some(address) = &self.address {
+            printout = format!("{} address:{}", printout, address.trim().to_string());
+        }
+        if let Some(port) = &self.port {
+            printout = format!("{} port:{}", printout, port);
+        }
+        if let Some(secret) = &self.secret {
+            printout = format!("{} secret:{}", printout, secret.trim().to_string());
+        }
+        printout = format!("{}]", printout);
+
+        // message
+        printout = format!("{}\x1B[0m {}", printout, message.trim().to_string());
+
+        // final printout
+        println!("{}", printout);
+    }
+}
 
 pub enum CustomLevel {
     // these are identical to log::Level
@@ -90,13 +189,13 @@ pub fn custom_print(level: Level, timestamp: String, line: Option<String>, messa
                 "\x1B[1;3{}m[{} {} {}]\x1B[0m {}",
                 color, level, timestamp, line, message
             );
-        },
+        }
         None => {
             println!(
                 "\x1B[1;3{}m[{} {}]\x1B[0m {}",
                 color, level, timestamp, message
             );
-        },
+        }
     }
 }
 
@@ -124,6 +223,15 @@ fn main() {
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
             Ok(n) => {
+                let test: Option<SipAppJson> = serde_json::from_str(&input).ok();
+                match test {
+                    Some(thing) => {
+                        thing.custom_print();
+                        continue;
+                    }
+                    None => {}
+                }
+
                 // ignore 0 byte reads
                 if n > 0 {
                     // trim off excess spaces and newlines
@@ -142,17 +250,15 @@ fn main() {
                         }
                         // TODO: I would like to check that the first item in the sub split formatted as a valid path...
                         // check that the second item in the sub split is a number (potentially a line number)
-                        let line_number = sub_split[1]
-                            .to_string()
-                            .replace("[", "")
-                            .replace("]", "");
+                        let line_number =
+                            sub_split[1].to_string().replace("[", "").replace("]", "");
                         let line_number = line_number.parse::<i32>();
                         match line_number {
                             Ok(_line_number) => {
                                 found_line = Some(split[index].to_string());
                                 split.remove(index);
                                 break;
-                            },
+                            }
                             Err(_) => {
                                 continue;
                             }
@@ -174,9 +280,8 @@ fn main() {
                                 found_level = Some(Level::from(level_candidate));
                                 split.remove(index);
                                 break;
-                            },
-                            Err(_) => {
-                            },
+                            }
+                            Err(_) => {}
                         }
                     }
 
@@ -186,8 +291,16 @@ fn main() {
                         // check for a timestamp anywhere in the line (though it will usually be in the first two splits)
                         for index in 0..split.len() - 1 {
                             // combine two splits, timestamps should be in this format
-                            let timestamp_candidate =
-                                split[index].to_owned() + " " + split[index + 1];
+                            // TODO: these replaces are largely unnecessary 
+                            let day = split[index].to_string()
+                                .replace(|c: char| !c.is_ascii(), "")
+                                .replace("[", "")
+                                .replace("]", "");
+                            let hour = split[index + 1].to_string()
+                                .replace(|c: char| !c.is_ascii(), "")
+                                .replace("[", "")
+                                .replace("]", "");
+                            let timestamp_candidate = day + " " + &hour;
                             // check if these two splits make a valid timestamp (minus the timezone)
                             let timestamp_candidate = NaiveDateTime::parse_from_str(
                                 &timestamp_candidate,
@@ -197,7 +310,6 @@ fn main() {
                                 // if we found a timestamp, set found_timestamp to it and remove the timestamp from the split
                                 Ok(timestamp_candidate) => {
                                     found_timestamp = Some(timestamp_candidate);
-                                    debug!("this line has a timestamp: {:?}", timestamp_candidate);
                                     split.remove(index + 1);
                                     split.remove(index);
                                     break;
@@ -215,10 +327,11 @@ fn main() {
 
                     // we might have a timestamp now, if not, we can make one
                     let timestamp = match found_timestamp {
-                        Some(found_timestamp) => found_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                        Some(found_timestamp) => {
+                            found_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+                        }
                         None => Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                     };
-                    debug!("this line's timestamp is: {:?}", timestamp);
 
                     // print the final message
                     let mut message = String::new();
