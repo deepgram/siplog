@@ -1,12 +1,12 @@
 mod logging;
 
 use chrono::{Local, NaiveDateTime};
-use log::{debug, error, Level};
+use log::{error, Level};
 use serde::Deserialize;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::io;
 use structopt::StructOpt;
-use std::convert::TryInto;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct SipAppJson {
@@ -55,8 +55,12 @@ impl SipAppJson {
     pub fn custom_print(&self) {
         let level = Level::from(CustomLevel::from(self.level));
         let seconds = (self.time / 1000).try_into().unwrap();
-        let nanoseconds = (1000000 * (self.time - 1000 * (self.time / 1000))).try_into().unwrap();
-        let timestamp = NaiveDateTime::from_timestamp(seconds, nanoseconds).format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let nanoseconds = (1000000 * (self.time - 1000 * (self.time / 1000)))
+            .try_into()
+            .unwrap();
+        let timestamp = NaiveDateTime::from_timestamp(seconds, nanoseconds)
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string();
         let message = self.msg.clone();
         let (level, color) = match level {
             Level::Error => ("ERROR", 1),
@@ -222,126 +226,125 @@ fn main() {
         // read line by line from stdin
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
-            Ok(n) => {
-                let test: Option<SipAppJson> = serde_json::from_str(&input).ok();
-                match test {
-                    Some(thing) => {
-                        thing.custom_print();
+            Ok(0) => break,
+            Ok(_num_bytes) => {
+                let json_candidate: Option<SipAppJson> = serde_json::from_str(&input).ok();
+                match json_candidate {
+                    Some(json_line) => {
+                        json_line.custom_print();
                         continue;
                     }
                     None => {}
                 }
 
-                // ignore 0 byte reads
-                if n > 0 {
-                    // trim off excess spaces and newlines
-                    input = input.trim().to_string();
+                // trim off excess spaces and newlines
+                input = input.trim().to_string();
 
-                    // split the string
-                    let mut split: Vec<&str> = input.split(" ").collect();
+                // split the string
+                let mut split: Vec<&str> = input.split(" ").collect();
 
-                    // search for source line
-                    let mut found_line: Option<String> = None;
-                    for index in 0..split.len() {
-                        // assume source lines are of the format "/path/to/file:line_number" (potentially surrounded by brackets [])
-                        let sub_split: Vec<&str> = split[index].split(":").collect();
-                        if sub_split.len() != 2 {
+                // search for source line
+                let mut found_line: Option<String> = None;
+                for index in 0..split.len() {
+                    // assume source lines are of the format "/path/to/file:line_number" (potentially surrounded by brackets [])
+                    let sub_split: Vec<&str> = split[index].split(":").collect();
+                    if sub_split.len() != 2 {
+                        continue;
+                    }
+                    // TODO: I would like to check that the first item in the sub split formatted as a valid path...
+                    // check that the second item in the sub split is a number (potentially a line number)
+                    let line_number = sub_split[1].to_string().replace("[", "").replace("]", "");
+                    let line_number = line_number.parse::<i32>();
+                    match line_number {
+                        Ok(_line_number) => {
+                            found_line = Some(split[index].to_string());
+                            split.remove(index);
+                            break;
+                        }
+                        Err(_) => {
                             continue;
                         }
-                        // TODO: I would like to check that the first item in the sub split formatted as a valid path...
-                        // check that the second item in the sub split is a number (potentially a line number)
-                        let line_number =
-                            sub_split[1].to_string().replace("[", "").replace("]", "");
-                        let line_number = line_number.parse::<i32>();
-                        match line_number {
-                            Ok(_line_number) => {
-                                found_line = Some(split[index].to_string());
-                                split.remove(index);
-                                break;
-                            }
-                            Err(_) => {
-                                continue;
-                            }
-                        }
                     }
+                }
 
-                    // search for an indicator of a level
-                    let mut found_level: Option<Level> = None;
-                    for index in 0..split.len() {
-                        // empirically, these may be surrounded by brackets [] or colons :)
-                        let level_candidate = split[index]
+                // search for an indicator of a level
+                let mut found_level: Option<Level> = None;
+                for index in 0..split.len() {
+                    // empirically, these may be surrounded by brackets [] or colons :)
+                    let level_candidate = split[index]
+                        .to_string()
+                        .replace("[", "")
+                        .replace("]", "")
+                        .replace(":", "");
+                    let level_candidate = CustomLevel::try_from(level_candidate);
+                    match level_candidate {
+                        Ok(level_candidate) => {
+                            found_level = Some(Level::from(level_candidate));
+                            split.remove(index);
+                            break;
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                // search for a timestamp
+                let mut found_timestamp: Option<NaiveDateTime> = None;
+                if split.len() >= 2 {
+                    // check for a timestamp anywhere in the line (though it will usually be in the first two splits)
+                    for index in 0..split.len() - 1 {
+                        // combine two splits, timestamps should be in this format
+                        // TODO: these replaces are largely unnecessary
+                        let day = split[index]
                             .to_string()
+                            .replace(|c: char| !c.is_ascii(), "")
                             .replace("[", "")
-                            .replace("]", "")
-                            .replace(":", "");
-                        let level_candidate = CustomLevel::try_from(level_candidate);
-                        match level_candidate {
-                            Ok(level_candidate) => {
-                                found_level = Some(Level::from(level_candidate));
+                            .replace("]", "");
+                        let hour = split[index + 1]
+                            .to_string()
+                            .replace(|c: char| !c.is_ascii(), "")
+                            .replace("[", "")
+                            .replace("]", "");
+                        let timestamp_candidate = day + " " + &hour;
+                        // check if these two splits make a valid timestamp (minus the timezone)
+                        let timestamp_candidate = NaiveDateTime::parse_from_str(
+                            &timestamp_candidate,
+                            "%Y-%m-%d %H:%M:%S%.3f", // TODO: why does this not force the precision to 3?
+                        );
+                        match timestamp_candidate {
+                            // if we found a timestamp, set found_timestamp to it and remove the timestamp from the split
+                            Ok(timestamp_candidate) => {
+                                found_timestamp = Some(timestamp_candidate);
+                                split.remove(index + 1);
                                 split.remove(index);
                                 break;
                             }
                             Err(_) => {}
                         }
                     }
-
-                    // search for a timestamp
-                    let mut found_timestamp: Option<NaiveDateTime> = None;
-                    if split.len() >= 2 {
-                        // check for a timestamp anywhere in the line (though it will usually be in the first two splits)
-                        for index in 0..split.len() - 1 {
-                            // combine two splits, timestamps should be in this format
-                            // TODO: these replaces are largely unnecessary 
-                            let day = split[index].to_string()
-                                .replace(|c: char| !c.is_ascii(), "")
-                                .replace("[", "")
-                                .replace("]", "");
-                            let hour = split[index + 1].to_string()
-                                .replace(|c: char| !c.is_ascii(), "")
-                                .replace("[", "")
-                                .replace("]", "");
-                            let timestamp_candidate = day + " " + &hour;
-                            // check if these two splits make a valid timestamp (minus the timezone)
-                            let timestamp_candidate = NaiveDateTime::parse_from_str(
-                                &timestamp_candidate,
-                                "%Y-%m-%d %H:%M:%S%.3f", // TODO: why does this not force the precision to 3?
-                            );
-                            match timestamp_candidate {
-                                // if we found a timestamp, set found_timestamp to it and remove the timestamp from the split
-                                Ok(timestamp_candidate) => {
-                                    found_timestamp = Some(timestamp_candidate);
-                                    split.remove(index + 1);
-                                    split.remove(index);
-                                    break;
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                    }
-
-                    // we might have a level now, if not, we'll use some default
-                    let level = match found_level {
-                        Some(found_level) => found_level,
-                        None => Level::Info,
-                    };
-
-                    // we might have a timestamp now, if not, we can make one
-                    let timestamp = match found_timestamp {
-                        Some(found_timestamp) => {
-                            found_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
-                        }
-                        None => Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                    };
-
-                    // print the final message
-                    let mut message = String::new();
-                    for str in split {
-                        message.push_str(str);
-                        message.push_str(" ");
-                    }
-                    message = message.trim().to_string(); // strip the last space we pushed
-                    custom_print(level, timestamp, found_line, message);
                 }
+
+                // we might have a level now, if not, we'll use some default
+                let level = match found_level {
+                    Some(found_level) => found_level,
+                    None => Level::Info,
+                };
+
+                // we might have a timestamp now, if not, we can make one
+                let timestamp = match found_timestamp {
+                    Some(found_timestamp) => {
+                        found_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+                    }
+                    None => Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                };
+
+                // print the final message
+                let mut message = String::new();
+                for str in split {
+                    message.push_str(str);
+                    message.push_str(" ");
+                }
+                message = message.trim().to_string(); // strip the last space we pushed
+                custom_print(level, timestamp, found_line, message);
             }
             Err(error) => {
                 error!("error readling line from stdin: {}", error);
