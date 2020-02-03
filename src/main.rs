@@ -62,19 +62,20 @@ impl SipAppJson {
             .format("%Y-%m-%d %H:%M:%S%.3f")
             .to_string();
         let message = self.msg.clone();
-        let (level, color) = match level {
-            Level::Error => ("ERROR", 1),
-            Level::Warn => ("WARN ", 3),
-            Level::Info => ("INFO ", 7),
-            Level::Debug => ("DEBUG", 4),
-            Level::Trace => ("TRACE", 5),
+
+        let level = match level {
+            Level::Error => "ERROR",
+            Level::Warn => "WARN ",
+            Level::Info => "INFO ",
+            Level::Debug => "DEBUG",
+            Level::Trace => "TRACE",
         };
-        // color, level, and timestamp
-        let mut printout = format!("\x1B[1;3{}m[{} {}]", color, level, timestamp);
+
+        // level, and timestamp
+        let mut printout = format!("[{} {}]", level, timestamp);
 
         // "extras"
-        let extras_color = 2;
-        printout = format!("{} \x1B[1;3{}m[", printout, extras_color);
+        printout = format!("{} [", printout);
         printout = format!("{}v:{}", printout, self.v);
         printout = format!("{} pid:{}", printout, self.pid);
         printout = format!("{} hostname:{}", printout, self.hostname.trim().to_string());
@@ -102,7 +103,7 @@ impl SipAppJson {
         printout = format!("{}]", printout);
 
         // message
-        printout = format!("{}\x1B[0m {}", printout, message.trim().to_string());
+        printout = format!("{} {}", printout, message.trim().to_string());
 
         // final printout
         println!("{}", printout);
@@ -179,26 +180,34 @@ impl TryFrom<String> for CustomLevel {
     }
 }
 
-pub fn custom_print(level: Level, timestamp: String, line: Option<String>, message: String) {
-    let (level, color) = match level {
-        Level::Error => ("ERROR", 1),
-        Level::Warn => ("WARN ", 3),
-        Level::Info => ("INFO ", 7),
-        Level::Debug => ("DEBUG", 4),
-        Level::Trace => ("TRACE", 5),
-    };
-    match line {
-        Some(line) => {
-            println!(
-                "\x1B[1;3{}m[{} {} {}]\x1B[0m {}",
-                color, level, timestamp, line, message
-            );
-        }
+pub fn custom_print(level: Option<Level>, timestamp: String, line: Option<String>, message: String) {
+    match level {
+        Some(level) => {
+            let level = match level {
+                Level::Error => "ERROR",
+                Level::Warn => "WARN ",
+                Level::Info => "INFO ",
+                Level::Debug => "DEBUG",
+                Level::Trace => "TRACE",
+            };
+
+            match line {
+                Some(line) => {
+                    println!(
+                        "[{} {} {}] {}",
+                        level, timestamp, line, message
+                    );
+                }
+                None => {
+                    println!(
+                        "[{} {}] {}",
+                        level, timestamp, message
+                    );
+                }
+            }
+        },
         None => {
-            println!(
-                "\x1B[1;3{}m[{} {}]\x1B[0m {}",
-                color, level, timestamp, message
-            );
+            println!("{}", message);
         }
     }
 }
@@ -209,6 +218,13 @@ struct SipLog {
     #[structopt(short = "v", parse(from_occurrences))]
     /// Increase the verbosity.
     verbosity: usize,
+
+    #[structopt(
+        short = "m",
+        long = "manual-level",
+        help = "Whether or not to manually add log levels."
+    )]
+    manual_level: bool,
 }
 
 fn main() {
@@ -324,9 +340,13 @@ fn main() {
                 }
 
                 // we might have a level now, if not, we'll use some default
+                
                 let level = match found_level {
-                    Some(found_level) => found_level,
-                    None => Level::Info,
+                    Some(found_level) => Some(found_level),
+                    None => match args.manual_level {
+                        true => Some(Level::Info),
+                        false => None,
+                    }
                 };
 
                 // we might have a timestamp now, if not, we can make one
